@@ -23,6 +23,7 @@ Wymaga karty z Vulkanem/GL 3.3. Testowane na GeForce 940MX (2 GB) — trzyma 60 
 | ↑ / ↓ | ciąg 0–900 m/s |
 | Shift | dopalacz (×4) |
 | F | wydobycie z namierzonej asteroidy |
+| Spacja | ogień do namierzonego pirata |
 | G | dokowanie / odczepienie (stacja musi być w zasięgu 700 m) |
 | 1 / 2 / 3 | w dokowaniu: sprzedaj rudę / kup paliwo / kup stop |
 | Shift + 1/2/3 | w dokowaniu: kup dany towar |
@@ -50,7 +51,12 @@ rynek odrzucony: asset ships/frigate.obj niezgodny z manifestem
 
 To jest zabezpieczenie przed podmienionym modelem i przed klientem z innego builda.
 
+## Pętla rozgrywki
+
+wydobycie rudy → walka z piratami (6 w sektorze, +350 kr za zestrzelenie) →
+dokowanie → sprzedaż rudy / zakup paliwa. Śmierć = odrodzenie przy stacji i utrata rudy.
+
 ## Czego nie ma
 
-Tekstur (jest tylko materiał z cieniowania), animacji, walki, dźwięku i sieci P2P.
-To szkielet z pełną pętlą rozgrywki: wydobycie → dokowanie → sprzedaż → zakup paliwa.
+Tekstur (jest tylko materiał z cieniowania), animacji, dźwięku, sieci P2P,
+więcej niż jednego sektora, misji i przemysłu.

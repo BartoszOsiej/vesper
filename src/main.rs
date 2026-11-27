@@ -52,6 +52,13 @@ struct Rock {
     left: f32,
 }
 
+struct Enemy {
+    pos: Vec3,
+    hp: f32,
+    cooldown: f32,
+    drift: f32,
+}
+
 struct State {
     window: Arc<Window>,
     gfx: Renderer,
@@ -67,6 +74,11 @@ struct State {
     fuel: u32,
     laser: f32,
     docked: bool,
+    enemies: Vec<Enemy>,
+    hull: f32,
+    shield: f32,
+    hit_flash: f32,
+    kills: u32,
     log: String,
     keys: HashSet<KeyCode>,
     shift: bool,
@@ -111,6 +123,20 @@ impl State {
             rocks.push(Rock { pos, radius, mesh: mi, left: radius * 4.0 });
         }
 
+        let mut enemies = Vec::new();
+        let mut eseed = 99u32;
+        for i in 0..6 {
+            eseed = eseed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let a = (eseed % 6283) as f32 / 1000.0;
+            let r = 900.0 + (eseed % 700) as f32;
+            enemies.push(Enemy {
+                pos: Vec3::new(a.cos() * r * 0.6, 40.0 * (i as f32), a.sin() * r * 0.6 - 1400.0),
+                hp: 100.0,
+                cooldown: 0.0,
+                drift: a,
+            });
+        }
+
         Self {
             window,
             gfx,
@@ -126,7 +152,12 @@ impl State {
             fuel: 10,
             laser: 0.0,
             docked: false,
-            log: "Witaj w VESPER".into(),
+            enemies,
+            hull: 100.0,
+            shield: 60.0,
+            hit_flash: 0.0,
+            kills: 0,
+            log: "Witaj w VESPER — uwaga, w sektorze są piraci".into(),
             keys: HashSet::new(),
             shift: false,
             last: std::time::Instant::now(),
@@ -201,6 +232,70 @@ impl State {
             }
         } else {
             self.laser = (self.laser - dt * 3.0).max(0.0);
+        }
+
+        // --- walka ---
+        let mut enemy_lock: Option<(usize, f32)> = None;
+        for (i, e) in self.enemies.iter().enumerate() {
+            let d = e.pos - self.ship.pos;
+            let dist = d.length();
+            if dist < 700.0 && d.normalize_or_zero().dot(fwd) > 0.88 {
+                if enemy_lock.map(|(_, bd)| dist < bd).unwrap_or(true) {
+                    enemy_lock = Some((i, dist));
+                }
+            }
+        }
+        if k.contains(&KeyCode::Space) {
+            if let Some((i, _)) = enemy_lock {
+                self.enemies[i].hp -= 34.0 * dt;
+                self.laser = (self.laser + dt * 8.0).min(1.0);
+            }
+        }
+
+        let mut killed = Vec::new();
+        for (i, e) in self.enemies.iter_mut().enumerate() {
+            let to_player = self.ship.pos - e.pos;
+            let dist = to_player.length().max(0.001);
+            let dir = to_player / dist;
+            if dist > 260.0 {
+                e.pos += dir * 70.0 * dt;
+            } else if dist < 150.0 {
+                e.pos -= dir * 45.0 * dt;
+            }
+            e.pos.y += (self.spin * 0.6 + e.drift).sin() * 12.0 * dt;
+
+            e.cooldown -= dt;
+            if dist < 520.0 && e.cooldown <= 0.0 {
+                e.cooldown = 1.9;
+                let dmg = 9.0;
+                if self.shield > 0.0 {
+                    self.shield = (self.shield - dmg).max(0.0);
+                } else {
+                    self.hull = (self.hull - dmg * 0.7).max(0.0);
+                }
+                self.hit_flash = 1.0;
+            }
+            if e.hp <= 0.0 {
+                killed.push(i);
+            }
+        }
+        for i in killed {
+            self.enemies.remove(i);
+            self.kills += 1;
+            self.credits += 350;
+            self.log = "Pirate zniszczony: +350 kr".into();
+        }
+
+        self.hit_flash = (self.hit_flash - dt * 2.0).max(0.0);
+        self.shield = (self.shield + 3.0 * dt).min(60.0);
+
+        if self.hull <= 0.0 {
+            self.hull = 100.0;
+            self.shield = 60.0;
+            self.cargo = 0.0;
+            self.ship.pos = self.station_pos + Vec3::new(0.0, 0.0, 320.0);
+            self.ship.speed = 30.0;
+            self.log = "Statek zniszczony — odrodzenie przy stacji, ruda przepadła".into();
         }
     }
 
@@ -280,6 +375,30 @@ impl State {
             None => "CEL BRAK".to_string(),
         };
         ui::text(&mut r, 24.0, h - 34.0, &lock, px, if self.target.is_some() { WARN } else { DIM });
+        if !self.enemies.is_empty() {
+            let near = self
+                .enemies
+                .iter()
+                .map(|e| e.pos.distance(self.ship.pos))
+                .fold(f32::MAX, f32::min);
+            ui::text(&mut r, 24.0, h - 116.0, &format!("PIRACI {} NAJBLIZSZY {:.0} M — SPACJA OGIEŃ", self.enemies.len(), near), px, WARN);
+        }
+
+        // paski: osłona (niebieski) i kadłub (pomarańczowy)
+        let bar_x = 24.0;
+        let bar_y = 24.0;
+        r.push(UiRect::new(bar_x, bar_y, 220.0, 12.0, [0.10, 0.12, 0.16, 0.8]));
+        r.push(UiRect::new(bar_x, bar_y, 220.0 * (self.shield / 60.0), 12.0, [0.28, 0.62, 0.95, 0.9]));
+        r.push(UiRect::new(bar_x, bar_y + 18.0, 220.0, 12.0, [0.10, 0.12, 0.16, 0.8]));
+        r.push(UiRect::new(bar_x, bar_y + 18.0, 220.0 * (self.hull / 100.0), 12.0, [0.92, 0.52, 0.22, 0.9]));
+        ui::text(&mut r, bar_x + 230.0, bar_y, &format!("OSLONA {:.0}", self.shield), 2.2, CREAM);
+        ui::text(&mut r, bar_x + 230.0, bar_y + 18.0, &format!("KADLUB {:.0}", self.hull), 2.2, CREAM);
+        ui::text(&mut r, bar_x + 420.0, bar_y, &format!("ZESTRZELONE {}", self.kills), 2.4, ACCENT);
+        if self.hit_flash > 0.0 {
+            let a = 0.35 * self.hit_flash;
+            r.push(UiRect::new(0.0, 0.0, self.gfx.width() as f32, 4.0, [0.9, 0.2, 0.2, a]));
+            r.push(UiRect::new(0.0, h - 4.0, self.gfx.width() as f32, 4.0, [0.9, 0.2, 0.2, a]));
+        }
 
         let dist = self.ship.pos.distance(self.station_pos);
         if dist < 900.0 {
@@ -328,7 +447,26 @@ impl State {
             rock_map.entry(r.mesh).or_default().push(Instance::new(Mat4::from_translation(r.pos) * rot, hot));
         }
 
-        let mut batches = vec![(self.ship_mesh, ship_inst), (self.station_mesh, station_inst)];
+        let enemy_inst: Vec<Instance> = self
+            .enemies
+            .iter()
+            .map(|e| {
+                let dir = (self.ship.pos - e.pos).normalize_or_zero();
+                let yaw = dir.z.atan2(dir.x);
+                Instance::new(
+                    Mat4::from_translation(e.pos)
+                        * Mat4::from_rotation_y(-yaw)
+                        * Mat4::from_scale(Vec3::splat(0.85)),
+                    [0.78, 0.34, 0.30, 1.0],
+                )
+            })
+            .collect();
+
+        let mut batches = vec![
+            (self.ship_mesh, ship_inst),
+            (self.station_mesh, station_inst),
+            (self.ship_mesh, enemy_inst),
+        ];
         for (mi, list) in rock_map {
             batches.push((mi, list));
         }

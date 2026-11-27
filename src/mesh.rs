@@ -99,6 +99,37 @@ impl MeshData {
         Ok(out)
     }
 
+    /// Stacja: pierścień + kolumna + cztery ramiona dokowania, z jednego klocka-bryły.
+    pub fn station(radius: f32) -> Self {
+        let mut out = MeshData::default();
+        let seg = 16;
+        for i in 0..seg {
+            let a = i as f32 / seg as f32 * std::f32::consts::TAU;
+            let cx = a.cos() * radius;
+            let cz = a.sin() * radius;
+            // segmenty muszą na siebie zachodzić, inaczej pierścień wygląda jak odłamki
+            let step = std::f32::consts::TAU * radius / seg as f32;
+            let s = step * 1.35;
+            push_box(&mut out, [cx, 0.0, cz], [s, s * 0.55, s], a);
+        }
+        // kolumna i piętra
+        push_box(&mut out, [0.0, 0.0, 0.0], [radius * 0.30, radius * 0.55, radius * 0.30], 0.0);
+        push_box(&mut out, [0.0, radius * 0.36, 0.0], [radius * 0.62, radius * 0.10, radius * 0.62], 0.0);
+        push_box(&mut out, [0.0, -radius * 0.30, 0.0], [radius * 0.46, radius * 0.12, radius * 0.46], 0.0);
+        // ramiona dokowania w czterech kierunkach
+        for k in 0..4 {
+            let a = k as f32 * std::f32::consts::FRAC_PI_2;
+            let d = radius * 0.55;
+            push_box(
+                &mut out,
+                [a.cos() * d, 0.0, a.sin() * d],
+                [radius * 0.42, 6.0, 9.0],
+                a,
+            );
+        }
+        out
+    }
+
     /// Asteroida: dwudziestościan rozbity na sferę z deterministycznymi wypukłościami.
     pub fn asteroid(seed: u32, radius: f32, noise: f32) -> Self {
         let (tris, base_v) = icosahedron();
@@ -120,6 +151,43 @@ impl MeshData {
             out.indices.extend_from_slice(&[base, base + 1, base + 2]);
         }
         out
+    }
+}
+
+/// Dokłada do siatki prostopadłościan obrócony o `yaw` wokół Y.
+fn push_box(out: &mut MeshData, c: [f32; 3], size: [f32; 3], yaw: f32) {
+    let (s, co) = yaw.sin_cos();
+    let (hx, hy, hz) = (size[0] * 0.5, size[1] * 0.5, size[2] * 0.5);
+    let mut p = [[0.0f32; 3]; 8];
+    let mut i = 0;
+    for sy in [-1.0f32, 1.0] {
+        for sz in [-1.0f32, 1.0] {
+            for sx in [-1.0f32, 1.0] {
+                let x = sx * hx;
+                let z = sz * hz;
+                p[i] = [c[0] + x * co - z * s, c[1] + sy * hy, c[2] + x * s + z * co];
+                i += 1;
+            }
+        }
+    }
+    // (0)=-x-y-z (1)=+x-y-z (2)=-x-y+z (3)=+x-y+z
+    // (4)=-x+y-z (5)=+x+y-z (6)=-x+y+z (7)=+x+y+z
+    let quads: [[usize; 4]; 6] = [
+        [0, 2, 3, 1], // dol
+        [4, 5, 7, 6], // gora
+        [0, 1, 5, 4], // -z
+        [2, 6, 7, 3], // +z
+        [0, 4, 6, 2], // -x
+        [1, 3, 7, 5], // +x
+    ];
+    for q in quads {
+        let base = out.verts.len() as u32;
+        let n = norm3(normal(p[q[0]], p[q[1]], p[q[2]]));
+        for k in q {
+            out.verts.push(Vertex { pos: p[k], nrm: n });
+        }
+        out.indices
+            .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
 }
 

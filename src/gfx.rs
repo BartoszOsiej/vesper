@@ -5,6 +5,7 @@ use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
 use crate::mesh::{MeshData, Vertex};
+use crate::ui::UiRect;
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -56,6 +57,11 @@ pub struct Renderer {
     pub meshes: Vec<MeshGpu>,
     inst_buf: wgpu::Buffer,
     inst_cap: usize,
+    ui_pipeline: wgpu::RenderPipeline,
+    ui_screen: wgpu::Buffer,
+    ui_bg: wgpu::BindGroup,
+    ui_buf: wgpu::Buffer,
+    ui_cap: usize,
 }
 
 impl Renderer {
@@ -188,6 +194,79 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
+        // --- UI 2D ---
+        let ui_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("ui"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("ui.wgsl").into()),
+        });
+        let ui_screen = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ui-screen"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let ui_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("ui"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let ui_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ui"),
+            layout: &ui_layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: ui_screen.as_entire_binding() }],
+        });
+        let ui_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("ui"),
+            bind_group_layouts: &[&ui_layout],
+            push_constant_ranges: &[],
+        });
+        const UI_ATTRS: [wgpu::VertexAttribute; 2] =
+            wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4];
+        let ui_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("ui"),
+            layout: Some(&ui_pl),
+            vertex: wgpu::VertexState {
+                module: &ui_shader,
+                entry_point: "vs",
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<UiRect>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &UI_ATTRS,
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &ui_shader,
+                entry_point: "fs",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        let ui_cap = 4096;
+        let ui_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ui-instances"),
+            size: (ui_cap * std::mem::size_of::<UiRect>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         Self {
             surface,
             device,
@@ -200,6 +279,11 @@ impl Renderer {
             meshes: Vec::new(),
             inst_buf,
             inst_cap,
+            ui_pipeline,
+            ui_screen,
+            ui_bg,
+            ui_buf,
+            ui_cap,
         }
     }
 
@@ -228,12 +312,26 @@ impl Renderer {
         self.depth = depth_view(&self.device, w, h);
     }
 
+    pub fn width(&self) -> u32 {
+        self.config.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.config.height
+    }
+
     pub fn aspect(&self) -> f32 {
         self.config.width as f32 / self.config.height.max(1) as f32
     }
 
     /// batches: (indeks siatki, instancje) - rysuje każdą siatkę z własną listą transformacji.
-    pub fn render(&mut self, view_proj: Mat4, eye: glam::Vec3, batches: &[(usize, Vec<Instance>)]) {
+    pub fn render(
+        &mut self,
+        view_proj: Mat4,
+        eye: glam::Vec3,
+        batches: &[(usize, Vec<Instance>)],
+        ui: &[UiRect],
+    ) {
         let cam = CameraU {
             view_proj: view_proj.to_cols_array_2d(),
             eye: [eye.x, eye.y, eye.z, 1.0],
@@ -306,6 +404,44 @@ impl Renderer {
                 }
             }
         }
+        // --- UI na wierzchu ---
+        if !ui.is_empty() {
+            if ui.len() > self.ui_cap {
+                self.ui_cap = ui.len().next_power_of_two();
+                self.ui_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("ui-instances"),
+                    size: (self.ui_cap * std::mem::size_of::<UiRect>()) as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
+            self.queue.write_buffer(&self.ui_screen, 0, bytemuck::cast_slice(&[
+                self.config.width as f32,
+                self.config.height as f32,
+                0.0f32,
+                0.0f32,
+            ]));
+            self.queue.write_buffer(&self.ui_buf, 0, bytemuck::cast_slice(ui));
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("ui"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.ui_pipeline);
+            pass.set_bind_group(0, &self.ui_bg, &[]);
+            pass.set_vertex_buffer(0, self.ui_buf.slice(..));
+            pass.draw(0..6, 0..ui.len() as u32);
+        }
+
         self.queue.submit(Some(encoder.finish()));
         frame.present();
     }

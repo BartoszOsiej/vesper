@@ -65,6 +65,19 @@ const FONT: &[(char, [u8; 5])] = &[
 ];
 
 fn glyph(c: char) -> [u8; 5] {
+    // Mikro-font jest ASCII, ale UI i logi używają polskich znaków i myślnika.
+    let c = match c {
+        '—' | '–' => '-',
+        'ą' | 'Ą' => 'A',
+        'ć' | 'Ć' => 'C',
+        'ę' | 'Ę' => 'E',
+        'ł' | 'Ł' => 'L',
+        'ń' | 'Ń' => 'N',
+        'ó' | 'Ó' => 'O',
+        'ś' | 'Ś' => 'S',
+        'ź' | 'Ź' | 'ż' | 'Ż' => 'Z',
+        other => other,
+    };
     let up = c.to_ascii_uppercase();
     FONT.iter()
         .find(|(k, _)| *k == up)
@@ -75,16 +88,18 @@ fn glyph(c: char) -> [u8; 5] {
 /// Tekst jako piksele. `px` = bok jednego piksela fontu.
 pub fn text(out: &mut Vec<UiRect>, x: f32, y: f32, s: &str, px: f32, c: [f32; 4]) {
     let mut cx = x;
+    let mut cy = y;
     for ch in s.chars() {
         if ch == '\n' {
             cx = x;
+            cy += 6.0 * px;
             continue;
         }
         let rows = glyph(ch);
         for (ry, bits) in rows.iter().enumerate() {
             for rx in 0..3 {
                 if bits & (0b100 >> rx) != 0 {
-                    out.push(UiRect::new(cx + rx as f32 * px, y + ry as f32 * px, px, px, c));
+                    out.push(UiRect::new(cx + rx as f32 * px, cy + ry as f32 * px, px, px, c));
                 }
             }
         }
@@ -92,7 +107,7 @@ pub fn text(out: &mut Vec<UiRect>, x: f32, y: f32, s: &str, px: f32, c: [f32; 4]
     }
 }
 
-#[allow(dead_code)]
+/// Szerokość tekstu w pikselach — do wyrównywania do prawej i sprawdzania kolizji.
 pub fn text_width(s: &str, px: f32) -> f32 {
-    s.chars().count() as f32 * 4.0 * px
+    s.chars().map(|c| if c == '\n' { 0.0 } else { 4.0 * px }).sum()
 }

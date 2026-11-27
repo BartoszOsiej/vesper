@@ -1,5 +1,6 @@
 //! Wierzchołki i wczytywanie siatek OBJ (ten sam format, który produkuje MTS-Ships).
 
+use glam::Vec3;
 use std::collections::HashMap;
 
 #[repr(C)]
@@ -99,48 +100,133 @@ impl MeshData {
         Ok(out)
     }
 
-    /// Stacja: pierścień + kolumna + cztery ramiona dokowania, z jednego klocka-bryły.
+    /// Stacja: dwa pierścienie, szprychy, rdzeń, ramiona dokowania i anteny.
+    /// Wszystko z klocków, ale z drobnym podziałem, żeby sylwetka nie była sześcianem.
     pub fn station(radius: f32) -> Self {
         let mut out = MeshData::default();
-        let seg = 16;
-        for i in 0..seg {
-            let a = i as f32 / seg as f32 * std::f32::consts::TAU;
-            let cx = a.cos() * radius;
-            let cz = a.sin() * radius;
-            // segmenty muszą na siebie zachodzić, inaczej pierścień wygląda jak odłamki
-            let step = std::f32::consts::TAU * radius / seg as f32;
-            let s = step * 1.35;
-            push_box(&mut out, [cx, 0.0, cz], [s, s * 0.55, s], a);
+        let tau = std::f32::consts::TAU;
+
+        // główny pierścień: gładki torus zamiast łańcucha klocków
+        push_torus(&mut out, 0.0, radius, 8.0, 96, 10);
+        // drugi, habitatowy pierścień nad głównym
+        let r2 = radius * 0.76;
+        push_torus(&mut out, 26.0, r2, 4.5, 72, 8);
+
+        // drobnica na pierścieniu: kapsuły, chłodnice, zbiorniki
+        for i in 0..24 {
+            let a = i as f32 / 24.0 * tau + 0.05;
+            let rr = radius + 2.0;
+            let y = if i % 3 == 0 { 8.5 } else if i % 3 == 1 { -7.0 } else { 0.0 };
+            let s = if i % 3 == 0 { 6.0 } else { 4.0 };
+            push_box(&mut out, [a.cos() * rr, y, a.sin() * rr], [s, s, s], a);
         }
-        // kolumna i piętra
-        push_box(&mut out, [0.0, 0.0, 0.0], [radius * 0.30, radius * 0.55, radius * 0.30], 0.0);
-        push_box(&mut out, [0.0, radius * 0.36, 0.0], [radius * 0.62, radius * 0.10, radius * 0.62], 0.0);
-        push_box(&mut out, [0.0, -radius * 0.30, 0.0], [radius * 0.46, radius * 0.12, radius * 0.46], 0.0);
-        // ramiona dokowania w czterech kierunkach
-        for k in 0..4 {
-            let a = k as f32 * std::f32::consts::FRAC_PI_2;
-            let d = radius * 0.55;
+
+        // szprychy łączące rdzeń z pierścieniem
+        for k in 0..8 {
+            let a = k as f32 * tau / 8.0 + 0.08;
+            let mid = radius * 0.58;
             push_box(
                 &mut out,
-                [a.cos() * d, 0.0, a.sin() * d],
-                [radius * 0.42, 6.0, 9.0],
+                [a.cos() * mid, 3.0, a.sin() * mid],
+                [radius * 0.95, 3.0, 5.0],
                 a,
             );
         }
+
+        // cztery ramiona dokowania zakończone klamrami
+        for k in 0..4 {
+            let a = k as f32 * std::f32::consts::FRAC_PI_2 + std::f32::consts::FRAC_PI_4;
+            push_box(
+                &mut out,
+                [a.cos() * radius * 0.88, 0.0, a.sin() * radius * 0.88],
+                [radius * 0.55, 9.0, 18.0],
+                a,
+            );
+            push_box(
+                &mut out,
+                [a.cos() * radius * 1.14, 0.0, a.sin() * radius * 1.14],
+                [10.0, 24.0, 32.0],
+                a,
+            );
+        }
+
+        // rdzeń: stos brył o różnych przekrojach
+        for (y, sx, sy, sz) in [
+            (-54.0, 24.0, 26.0, 24.0),
+            (-22.0, 44.0, 38.0, 44.0),
+            (22.0, 34.0, 48.0, 34.0),
+            (54.0, 20.0, 18.0, 20.0),
+        ] {
+            push_box(&mut out, [0.0, y, 0.0], [sx, sy, sz], 0.0);
+        }
+
+        // drobnica wokół rdzenia
+        for k in 0..12 {
+            let a = k as f32 * tau / 12.0;
+            let rr = 40.0;
+            push_box(
+                &mut out,
+                [a.cos() * rr, -10.0 + (k % 3) as f32 * 9.0, a.sin() * rr],
+                [9.0, 7.0, 6.0],
+                a,
+            );
+        }
+
+        // anteny i maszty
+        push_box(&mut out, [12.0, 88.0, 0.0], [2.0, 34.0, 2.0], 0.0);
+        push_box(&mut out, [-12.0, 82.0, 0.0], [2.0, 26.0, 2.0], 0.0);
+        push_box(&mut out, [0.0, 106.0, 0.0], [28.0, 2.0, 2.0], 0.0);
+
+        // panele słoneczne — szeroka, cienka sylwetka
+        push_box(&mut out, [radius * 0.98, 44.0, 0.0], [radius * 0.62, 1.5, 40.0], 0.0);
+        push_box(&mut out, [-radius * 0.98, 44.0, 0.0], [radius * 0.62, 1.5, 40.0], 0.0);
         out
     }
 
-    /// Asteroida: dwudziestościan rozbity na sferę z deterministycznymi wypukłościami.
+    /// Kostka jednostkowa — cząstki, smugowce, znaczniki.
+    pub fn cube(size: f32) -> Self {
+        let mut out = MeshData::default();
+        push_box(&mut out, [0.0, 0.0, 0.0], [size, size, size], 0.0);
+        out
+    }
+
+    /// Kamienista asteroida: dwie rundy podziału dwudziestościanu, wypukłości
+    /// wieloskalowe i lekko wydłużona bryła (deterministycznie z `seed`).
     pub fn asteroid(seed: u32, radius: f32, noise: f32) -> Self {
         let (tris, base_v) = icosahedron();
+        let mut faces: Vec<[Vec3; 3]> = tris
+            .iter()
+            .map(|t| {
+                [
+                    Vec3::from(base_v[t[0]]).normalize(),
+                    Vec3::from(base_v[t[1]]).normalize(),
+                    Vec3::from(base_v[t[2]]).normalize(),
+                ]
+            })
+            .collect();
+        for _ in 0..2 {
+            faces = faces.iter().flat_map(|f| subdivide(f)).collect();
+        }
+
+        let sx = 1.0 + (hash_u32(seed) - 0.5) * 0.34;
+        let sy = 0.88 + (hash_u32(seed ^ 0x51ED) - 0.5) * 0.3;
+        let sz = 1.0 + (hash_u32(seed ^ 0x9E37) - 0.5) * 0.3;
+        let off = Vec3::new(
+            hash_u32(seed ^ 0xA1) * 60.0,
+            hash_u32(seed ^ 0xB2) * 60.0,
+            hash_u32(seed ^ 0xC3) * 60.0,
+        );
         let mut out = MeshData::default();
-        for tri in tris {
-            let p: Vec<[f32; 3]> = tri
+        for f in faces {
+            let p: Vec<[f32; 3]> = f
                 .iter()
-                .map(|&i| {
-                    let n = norm3(base_v[i]);
-                    let k = 1.0 + noise * (hash01(seed, n) - 0.5);
-                    [n[0] * radius * k, n[1] * radius * k, n[2] * radius * k]
+                .map(|d| {
+                    let n1 = fbm3(*d * 1.35 + off) - 0.5;
+                    let n2 = fbm3(*d * 4.2 + off * 1.7) - 0.5;
+                    let n3 = vnoise(*d * 11.0 + off * 2.3) - 0.5;
+                    let k = 1.0 + noise * (n1 * 1.15 + n2 * 0.38 + n3 * 0.10);
+                    let v = *d * radius * k * Vec3::new(sx, sy, sz);
+                    [v.x, v.y, v.z]
                 })
                 .collect();
             let nrm = norm3(normal(p[0], p[1], p[2]));
@@ -152,9 +238,49 @@ impl MeshData {
         }
         out
     }
+
+    /// Kwadrat jednostkowy w XY — sprite'y gwiazd, silników i świateł.
+    pub fn quad() -> Self {
+        let mut out = MeshData::default();
+        for (x, y) in [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)] {
+            out.verts.push(Vertex { pos: [x, y, 0.0], nrm: [0.0, 0.0, 1.0] });
+        }
+        out.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+        out
+    }
 }
 
 /// Dokłada do siatki prostopadłościan obrócony o `yaw` wokół Y.
+/// Wycinek torusa z gładkimi normalnymi — pierścień stacji i habitat.
+fn push_torus(out: &mut MeshData, y: f32, major: f32, minor: f32, major_seg: usize, minor_seg: usize) {
+    let tau = std::f32::consts::TAU;
+    let base = out.verts.len() as u32;
+    for i in 0..major_seg {
+        let u = i as f32 / major_seg as f32 * tau;
+        let (su, cu) = u.sin_cos();
+        for j in 0..minor_seg {
+            let v = j as f32 / minor_seg as f32 * tau;
+            let (sv, cv) = v.sin_cos();
+            let r = major + minor * cv;
+            out.verts.push(Vertex {
+                pos: [r * cu, y + minor * sv, r * su],
+                nrm: [cv * cu, sv, cv * su],
+            });
+        }
+    }
+    for i in 0..major_seg {
+        let i2 = (i + 1) % major_seg;
+        for j in 0..minor_seg {
+            let j2 = (j + 1) % minor_seg;
+            let a = base + (i * minor_seg + j) as u32;
+            let b = base + (i2 * minor_seg + j) as u32;
+            let c = base + (i * minor_seg + j2) as u32;
+            let d = base + (i2 * minor_seg + j2) as u32;
+            out.indices.extend_from_slice(&[a, c, d, a, d, b]);
+        }
+    }
+}
+
 fn push_box(out: &mut MeshData, c: [f32; 3], size: [f32; 3], yaw: f32) {
     let (s, co) = yaw.sin_cos();
     let (hx, hy, hz) = (size[0] * 0.5, size[1] * 0.5, size[2] * 0.5);
@@ -227,15 +353,71 @@ fn quant(v: [f32; 3]) -> [i32; 12] {
     ]
 }
 
-/// Tani hash kierunku - deterministyczne wypukłości.
-fn hash01(seed: u32, n: [f32; 3]) -> f32 {
-    let mut h = seed.wrapping_mul(0x9E37_79B9);
-    for c in n {
-        h ^= (c * 10_000.0) as i32 as u32;
+/// Dzieli trójkąt na cztery; wierzchołki normalizujemy, więc sąsiednie
+/// trójkąty dzielą dokładnie te same pozycje (brak pęknięć).
+fn subdivide(f: &[Vec3; 3]) -> Vec<[Vec3; 3]> {
+    let (a, b, c) = (f[0], f[1], f[2]);
+    let ab = (a + b).normalize();
+    let bc = (b + c).normalize();
+    let ca = (c + a).normalize();
+    vec![
+        [a, ab, ca],
+        [ab, b, bc],
+        [ca, bc, c],
+        [ab, bc, ca],
+    ]
+}
+
+fn hash_u32(mut h: u32) -> f32 {
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x7feb_352d);
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x846c_a68b);
+    h ^= h >> 16;
+    (h & 0x00FF_FFFF) as f32 / 16_777_216.0
+}
+
+/// Hash punktu 3D bez alokacji — podstawa szumu proceduralnego.
+fn hash3(p: Vec3) -> f32 {
+    let mut h = 0x9E37_79B9u32;
+    for c in [p.x, p.y, p.z] {
+        h ^= (c * 8192.0) as i32 as u32;
         h = h.wrapping_mul(0x85EB_CA6B);
         h ^= h >> 13;
     }
-    (h % 10_000) as f32 / 10_000.0
+    (h & 0x00FF_FFFF) as f32 / 16_777_216.0
+}
+
+fn vnoise(p: Vec3) -> f32 {
+    let i = p.floor();
+    let f = p - i;
+    let u = f * f * (Vec3::splat(3.0) - 2.0 * f);
+    let mut acc = 0.0;
+    for dz in 0..2 {
+        for dy in 0..2 {
+            for dx in 0..2 {
+                let w = Vec3::new(dx as f32, dy as f32, dz as f32);
+                let h = hash3(i + w);
+                let wx = if dx == 0 { 1.0 - u.x } else { u.x };
+                let wy = if dy == 0 { 1.0 - u.y } else { u.y };
+                let wz = if dz == 0 { 1.0 - u.z } else { u.z };
+                acc += h * wx * wy * wz;
+            }
+        }
+    }
+    acc
+}
+
+fn fbm3(p: Vec3) -> f32 {
+    let mut q = p;
+    let mut amp = 0.5;
+    let mut sum = 0.0;
+    for _ in 0..3 {
+        sum += amp * vnoise(q);
+        q = q * 2.03 + Vec3::new(17.0, 31.0, 7.0);
+        amp *= 0.5;
+    }
+    sum / 0.875
 }
 
 fn icosahedron() -> (Vec<[usize; 3]>, Vec<[f32; 3]>) {

@@ -37,8 +37,8 @@ pub enum MarketError {
 impl std::fmt::Display for MarketError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MarketError::Io(e) => write!(f, "błąd wejścia/wyjścia: {e}"),
-            MarketError::Malformed(e) => write!(f, "zły format rynku: {e}"),
+            MarketError::Io(e) => write!(f, "i/o error: {e}"),
+            MarketError::Malformed(e) => write!(f, "malformed market: {e}"),
             MarketError::AssetMismatch { path, expected, got } => write!(
                 f,
                 "asset {path} niezgodny z manifestem (oczekiwano {expected}, jest {got})"
@@ -59,7 +59,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 /// ```text
 /// station VESPER-01
 /// version 1
-/// item ore_raw "Ruda" 12 8
+/// item ore_raw "Ore" 12 8
 /// asset ships/frigate.obj <sha256>
 /// ```
 pub fn parse(text: &str) -> Result<(Market, BTreeMap<String, String>), MarketError> {
@@ -90,15 +90,15 @@ pub fn parse(text: &str) -> Result<(Market, BTreeMap<String, String>), MarketErr
                     .trim_matches('"')
                     .to_string();
                 let buy: u64 = it.next().and_then(|v| v.parse().ok()).ok_or_else(|| {
-                    MarketError::Malformed(format!("item {id}: zła cena kupna"))
+                    MarketError::Malformed(format!("item {id}: bad buy price"))
                 })?;
                 let sell: u64 = it.next().and_then(|v| v.parse().ok()).ok_or_else(|| {
-                    MarketError::Malformed(format!("item {id}: zła cena sprzedaży"))
+                    MarketError::Malformed(format!("item {id}: bad sell price"))
                 })?;
                 items.push(MarketItem { id, name, buy, sell });
             }
             "asset" => {
-                let p = it.next().ok_or_else(|| MarketError::Malformed("asset: brak ścieżki".into()))?;
+                let p = it.next().ok_or_else(|| MarketError::Malformed("asset: missing path".into()))?;
                 let h = it.next().ok_or_else(|| MarketError::Malformed("asset: brak hasha".into()))?;
                 assets.insert(p.to_string(), h.to_string());
             }
@@ -132,7 +132,7 @@ mod tests {
 
     fn market_text(asset: &str, hash: &str) -> String {
         format!(
-            "station VESPER-01\nversion 1\nitem ore_raw \"Ruda\" 12 8\nasset {asset} {hash}\n"
+            "station VESPER-01\nversion 1\nitem ore_raw \"Ore\" 12 8\nasset {asset} {hash}\n"
         )
     }
 
@@ -142,7 +142,7 @@ mod tests {
         assert_eq!(m.station, "VESPER-01");
         assert_eq!(m.version, 1);
         assert_eq!(m.items.len(), 1);
-        assert_eq!(m.items[0].name, "Ruda");
+        assert_eq!(m.items[0].name, "Ore");
         assert_eq!(m.items[0].buy, 12);
         assert_eq!(a["ship.obj"], "abc");
     }

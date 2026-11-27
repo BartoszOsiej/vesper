@@ -114,6 +114,7 @@ impl Ship {
             * Mat4::from_rotation_y(self.yaw)
             * Mat4::from_rotation_z(-self.pitch)
             * Mat4::from_rotation_x(self.roll)
+            * Mat4::from_scale(Vec3::splat(1.35))
     }
 }
 
@@ -220,16 +221,16 @@ impl State {
         // Handshake marketu: jeśli asset nie zgadza się z manifestem, klient nie startuje.
         let root = std::path::Path::new("assets");
         let market = market::handshake(root, &root.join("market/market.txt"))
-            .unwrap_or_else(|e| panic!("rynek odrzucony: {e}"));
-        println!("rynek {} v{} — assety zgodne", market.station, market.version);
+            .unwrap_or_else(|e| panic!("market rejected: {e}"));
+        println!("market {} v{} — assets verified", market.station, market.version);
         for it in &market.items {
-            println!("  {:14} {:10} kupno {:>4}  sprzedaz {:>4}", it.id, it.name, it.buy, it.sell);
+            println!("  {:14} {:10} buy {:>4}  sell {:>4}", it.id, it.name, it.buy, it.sell);
         }
 
-        let obj = std::fs::read_to_string("assets/ships/frigate.obj")
-            .expect("brak assets/ships/frigate.obj — skopiuj z midpoly/out/ships");
-        let ship_data = MeshData::from_obj(&obj).expect("nie udało się wczytać OBJ");
-        println!("statek: {} wierzchołków, {} indeksów", ship_data.verts.len(), ship_data.indices.len());
+        // Kadłub jest generowany proceduralnie; plik OBJ zostaje w manifeście
+        // rynku jako asset referencyjny generatora MTS-Ships.
+        let ship_data = MeshData::frigate();
+        println!("ship: {} vertices, {} indices", ship_data.verts.len(), ship_data.indices.len());
         let ship_mesh = gfx.add_mesh(&ship_data);
         let station_mesh = gfx.add_mesh(&MeshData::station(120.0));
         let cube_mesh = gfx.add_mesh(&MeshData::cube(1.0));
@@ -312,7 +313,7 @@ impl State {
             rng: 0x5EED_1234,
             flash: 0.0,
             respawn: 20.0,
-            log: "Witaj w VESPER — uwaga, w sektorze są piraci".into(),
+            log: "Welcome to VESPER — hostiles in the sector".into(),
             keys: HashSet::new(),
             shift: false,
             fullscreen: false,
@@ -388,7 +389,7 @@ impl State {
             return;
         }
         if self.fuel == 0 {
-            self.log = "Brak paliwa — kup na stacji".into();
+            self.log = "No fuel — buy at the station".into();
             return;
         }
         self.fuel -= 1;
@@ -396,7 +397,7 @@ impl State {
         let name = self.sectors[next].name;
         self.enter_sector(next);
         self.flash = 1.0;
-        self.log = format!("Skok nadprzestrzenny: sektor {name}");
+        self.log = format!("Jump complete: sector {name}");
     }
 
     fn explode(&mut self, at: Vec3, n: usize, color: [f32; 3], power: f32) {
@@ -546,7 +547,7 @@ impl State {
                 }
                 self.hit_flash = 1.0;
                 self.explode(self.ship.pos, 6, [1.0, 0.62, 0.3], 34.0);
-                self.log = "Kolizja ze skala — oslona ucierpiala".into();
+                self.log = "Hull impact — shields took damage".into();
             }
         }
         let sd = self.ship.pos - self.station_pos;
@@ -555,7 +556,7 @@ impl State {
             self.ship.pos = self.station_pos + n * 155.0 * STATION_SCALE;
             self.ship.speed *= 0.3;
             self.hit_flash = 1.0;
-            self.log = "Uwaga na strukture stacji".into();
+            self.log = "Warning: station structure".into();
         }
 
         // namierzanie asteroidy
@@ -581,7 +582,7 @@ impl State {
             if let Some(i) = self.target {
                 if self.cargo + self.alloy * ALLOY_VOL >= CARGO_CAP {
                     self.laser = 0.0;
-                    self.log = "Ladownia pelna — sprzedaj rude albo rafinuj stop".into();
+                    self.log = "Cargo full — sell ore or refine alloy".into();
                 } else {
                     let take = (6.0 * dt).min(self.rocks[i].left);
                     self.rocks[i].left -= take;
@@ -697,9 +698,9 @@ impl State {
                 self.explode(at, 16, [0.55, 0.68, 1.0], 60.0);
             }
             self.log = if self.contract_done >= self.contract_goal {
-                "Pirate zniszczony — kontrakt gotowy do odbioru na stacji".to_string()
+                "Pirate destroyed — contract ready at the station".to_string()
             } else {
-                format!("Pirate zniszczony: +350 kr  kontrakt {}/{}", self.contract_done, self.contract_goal)
+                format!("Pirate destroyed: +350 cr  contract {}/{}", self.contract_done, self.contract_goal)
             };
         }
 
@@ -713,7 +714,7 @@ impl State {
             let r = 900.0 + self.rnd() * 700.0;
             let pos = self.station_pos + Vec3::new(a.cos() * r * 0.6, 40.0 + self.rnd() * 160.0, a.sin() * r * 0.6);
             self.enemies.push(Enemy { pos, hp: 100.0, cooldown: 0.5, drift: a });
-            self.log = "Nowy pirat wszedł do sektora".into();
+            self.log = "New pirate entered the sector".into();
         }
 
         if self.hull <= 0.0 {
@@ -733,9 +734,9 @@ impl State {
         if self.ship.pos.distance(self.station_pos) < 900.0 {
             self.docked = true;
             self.ship.speed = 0.0;
-            self.log = "Dokowanie zakończone".into();
+            self.log = "Docking complete".into();
         } else {
-            self.log = "Za daleko od stacji".into();
+            self.log = "Too far from the station".into();
         }
     }
 
@@ -743,7 +744,7 @@ impl State {
     /// zmienić, a klawisze muszą dalej oznaczać ten sam towar.
     fn trade(&mut self, id: &str, sell: bool) {
         let Some(item) = self.market.items.iter().find(|i| i.id == id).cloned() else {
-            self.log = format!("Brak towaru {id} w rynku");
+            self.log = format!("No {id} on the market");
             return;
         };
         let price = station_price(if sell { item.sell } else { item.buy }, self.sector, id);
@@ -756,7 +757,7 @@ impl State {
             };
             let amount = held.floor() as u64;
             if amount == 0 {
-                self.log = format!("Brak towaru {} w ładowni", item.name);
+                self.log = format!("No {} in cargo", item.name);
                 return;
             }
             let gain = amount * price;
@@ -766,31 +767,31 @@ impl State {
                 _ => {}
             }
             self.credits += gain;
-            self.log = format!("Sprzedano {amount} x {} za {gain} kr", item.name);
+            self.log = format!("Sold {amount} x {} for {gain} cr", item.name);
         } else if id == "fuel" {
             let cost = price;
             if self.credits < cost {
-                self.log = "Za mało kredytów".into();
+                self.log = "Not enough credits".into();
                 return;
             }
             self.credits -= cost;
             self.fuel += 1;
-            self.log = format!("Kupiono {} za {cost} kr", item.name);
+            self.log = format!("Bought {} for {cost} cr", item.name);
         } else if id == "ore_raw" {
             let cost = price;
             if self.credits < cost {
-                self.log = "Za mało kredytów".into();
+                self.log = "Not enough credits".into();
                 return;
             }
             if self.cargo + self.alloy * ALLOY_VOL + 5.0 > CARGO_CAP {
-                self.log = "Ladownia pelna".into();
+                self.log = "Cargo full".into();
                 return;
             }
             self.credits -= cost;
             self.cargo += 5.0;
-            self.log = format!("Kupiono {} za {cost} kr", item.name);
+            self.log = format!("Bought {} for {cost} cr", item.name);
         } else {
-            self.log = "Stop powstaje w rafinerii: 5 rafinuj 10 rudy".into();
+            self.log = "Alloy is refined: press 5 to refine 10 ore".into();
         }
     }
 
@@ -807,18 +808,18 @@ impl State {
                 self.log = format!("Rafinacja potrzebuje {REFINE_IN:.0} rudy");
             }
             Err(RefineError::NoSpace) => {
-                self.log = "Brak miejsca w ładowni na stop".into();
+                self.log = "No cargo space for alloy".into();
             }
         }
     }
 
     fn claim_contract(&mut self) {
         if self.contract_done < self.contract_goal {
-            self.log = format!("Kontrakt: zestrzel {}/{} piratów", self.contract_done, self.contract_goal);
+            self.log = format!("Contract: destroy {}/{} pirates", self.contract_done, self.contract_goal);
             return;
         }
         self.credits += self.contract_reward;
-        self.log = format!("Kontrakt rozliczony: +{} kr", self.contract_reward);
+        self.log = format!("Contract paid: +{} cr", self.contract_reward);
         self.contract_done = 0;
         self.contract_goal += 2;
         self.contract_reward = 900 + (self.contract_goal as u64 - 3) * 450;
@@ -847,7 +848,7 @@ impl State {
         );
         match std::fs::write("savegame.txt", text) {
             Ok(_) => self.log = "Zapisano savegame.txt (F9 wczytuje)".into(),
-            Err(e) => self.log = format!("Zapis nieudany: {e}"),
+            Err(e) => self.log = format!("Save failed: {e}"),
         }
     }
 
@@ -855,7 +856,7 @@ impl State {
         let text = match std::fs::read_to_string("savegame.txt") {
             Ok(t) => t,
             Err(_) => {
-                self.log = "Brak savegame.txt".into();
+                self.log = "No savegame.txt".into();
                 return;
             }
         };
@@ -900,7 +901,7 @@ impl State {
         self.ship.yaw = yaw.unwrap_or(self.ship.yaw);
         self.ship.pitch = pitch.unwrap_or(self.ship.pitch);
         self.ship.roll = roll.unwrap_or(self.ship.roll);
-        self.log = "Wczytano savegame.txt".into();
+        self.log = "Loaded savegame.txt".into();
     }
 
     fn hud(&self) -> Vec<UiRect> {
@@ -924,13 +925,13 @@ impl State {
             let right = px0 + pw - 30.0 * u;
             let mut y = py + 24.0 * u;
 
-            ui::text(&mut r, x, y, &format!("STACJA {}", self.market.station), 4.2 * u, ACCENT);
+            ui::text(&mut r, x, y, &format!("STATION {}", self.market.station), 4.2 * u, ACCENT);
             y += 32.0 * u;
             ui::text(
                 &mut r,
                 x,
                 y,
-                &format!("SEKTOR {} - {}   RYNEK LOKALNY", self.sectors[self.sector].name, self.sector + 1),
+                &format!("SECTOR {} - {}   LOCAL MARKET", self.sectors[self.sector].name, self.sector + 1),
                 2.1 * u,
                 DIM,
             );
@@ -945,9 +946,9 @@ impl State {
             let alloy_sell = item("ore_refined").map(|i| station_price(i.sell, self.sector, "ore_refined")).unwrap_or(0);
 
             for (name, hint, price) in [
-                ("RUDA", "1 SPRZEDAJ   SHIFT+1 KUP 5", format!("{ore_sell} KR")),
-                ("PALIWO", "2 KUP 1", format!("{fuel_buy} KR")),
-                ("STOP", "3 SPRZEDAJ", format!("{alloy_sell} KR")),
+                ("ORE", "1 SELL   SHIFT+1 BUY 5", format!("{ore_sell} KR")),
+                ("FUEL", "2 BUY 1", format!("{fuel_buy} KR")),
+                ("ALLOY", "3 SELL", format!("{alloy_sell} KR")),
             ] {
                 ui::text(&mut r, x, y, name, 3.2 * u, CREAM);
                 ui::text(&mut r, x + 140.0 * u, y, hint, 2.2 * u, DIM);
@@ -970,20 +971,20 @@ impl State {
                 &mut r,
                 x,
                 y,
-                &format!("KREDYTY {}   RUD {:.1}   STOP {:.1}   PALIWO {}", self.credits, self.cargo, self.alloy, self.fuel),
+                &format!("CREDITS {}   ORE {:.1}   ALLOY {:.1}   FUEL {}", self.credits, self.cargo, self.alloy, self.fuel),
                 2.6 * u,
                 CREAM,
             );
             y += 26.0 * u;
             let load = (self.cargo + self.alloy * ALLOY_VOL) / CARGO_CAP;
-            ui::text(&mut r, x, y, &format!("LADOWNIA {:.0}/{:.0} M3", load * CARGO_CAP, CARGO_CAP), 2.1 * u, DIM);
+            ui::text(&mut r, x, y, &format!("CARGO {:.0}/{:.0} M3", load * CARGO_CAP, CARGO_CAP), 2.1 * u, DIM);
             hud_bar(&mut r, x, y + 14.0 * u, (pw - 60.0 * u).min(260.0 * u), 5.0 * u, load, ACCENT);
             y += 30.0 * u;
 
             let contract = if self.contract_done >= self.contract_goal {
-                format!("KONTRAKT GOTOWY: {} PIRATOW - 4 ODBIERZ {} KR", self.contract_goal, self.contract_reward)
+                format!("CONTRACT READY: {} PIRATES - 4 CLAIM {} CR", self.contract_goal, self.contract_reward)
             } else {
-                format!("KONTRAKT {}/{}   NAGRODA {} KR", self.contract_done, self.contract_goal, self.contract_reward)
+                format!("CONTRACT {}/{}   REWARD {} CR", self.contract_done, self.contract_goal, self.contract_reward)
             };
             ui::text(
                 &mut r,
@@ -994,9 +995,9 @@ impl State {
                 if self.contract_done >= self.contract_goal { ACCENT } else { WARN },
             );
             y += 24.0 * u;
-            ui::text(&mut r, x, y, &format!("ZESTRZELONE {}   F5 ZAPIS   F9 WCZYTAJ", self.kills), 2.0 * u, DIM);
+            ui::text(&mut r, x, y, &format!("KILLS {}   F5 SAVE   F9 LOAD", self.kills), 2.0 * u, DIM);
             y += 28.0 * u;
-            ui::text(&mut r, x, y, "1-3 HANDEL   SHIFT+1 KUP  5 RAFINUJ  4 KONTRAKT  G ODCZEP", 1.9 * u, DIM);
+            ui::text(&mut r, x, y, "1-3 TRADE   SHIFT+1 BUY  5 REFINE  4 CONTRACT  G UNDOCK", 1.9 * u, DIM);
             y += 24.0 * u;
             if !self.log.is_empty() {
                 ui::text(&mut r, x, y, &self.log, 2.2 * u, WARN);
@@ -1014,7 +1015,7 @@ impl State {
             &mut r,
             m + panel_w - 12.0 * u,
             m + 13.0 * u,
-            &format!("SEKTOR {}/{}", self.sector + 1, self.sectors.len()),
+            &format!("SECTOR {}/{}", self.sector + 1, self.sectors.len()),
             1.8 * u,
             DIM,
         );
@@ -1025,11 +1026,11 @@ impl State {
         let val_w = 4.0 * 4.0 * label_px;
         let bar_w = (bar_right - val_w - 8.0 * u - bar_x).max(40.0);
         let sy = m + 38.0 * u;
-        ui::text(&mut r, m + 12.0 * u, sy, "OSLONA", label_px, DIM);
+        ui::text(&mut r, m + 12.0 * u, sy, "SHIELD", label_px, DIM);
         right_text(&mut r, bar_right, sy, &format!("{:.0}", self.shield), label_px, CREAM);
         hud_bar(&mut r, bar_x, sy + 2.0 * u, bar_w, 5.0 * u, self.shield / 60.0, [0.28, 0.62, 0.95, 0.9]);
         let hy = sy + 20.0 * u;
-        ui::text(&mut r, m + 12.0 * u, hy, "KADLUB", label_px, DIM);
+        ui::text(&mut r, m + 12.0 * u, hy, "HULL", label_px, DIM);
         right_text(&mut r, bar_right, hy, &format!("{:.0}", self.hull), label_px, if self.hull < 40.0 { DANGER } else { CREAM });
         let hull_col = if self.hull < 40.0 { DANGER } else { [0.92, 0.52, 0.22, 0.9] };
         hud_bar(&mut r, bar_x, hy + 2.0 * u, bar_w, 5.0 * u, self.hull / 100.0, hull_col);
@@ -1038,14 +1039,14 @@ impl State {
         let right = w - m;
         right_text(&mut r, right, m, &format!("{} KR", self.credits), 3.2 * u, CREAM);
         let load = (self.cargo + self.alloy * ALLOY_VOL) / CARGO_CAP;
-        right_text(&mut r, right, m + 24.0 * u, &format!("LADOWNIA {:.0}/{:.0} M3", load * CARGO_CAP, CARGO_CAP), 1.8 * u, DIM);
+        right_text(&mut r, right, m + 24.0 * u, &format!("CARGO {:.0}/{:.0} M3", load * CARGO_CAP, CARGO_CAP), 1.8 * u, DIM);
         let cw = 150.0 * u;
         hud_bar(&mut r, right - cw, m + 36.0 * u, cw, 5.0 * u, load, [0.35, 0.85, 0.95, 0.85]);
         right_text(
             &mut r,
             right,
             m + 50.0 * u,
-            &format!("RUD {:.1}   STOP {:.1}   PALIWO {}", self.cargo, self.alloy, self.fuel),
+            &format!("ORE {:.1}   ALLOY {:.1}   FUEL {}", self.cargo, self.alloy, self.fuel),
             2.0 * u,
             CREAM,
         );
@@ -1053,7 +1054,7 @@ impl State {
             &mut r,
             right,
             m + 70.0 * u,
-            &format!("KONTRAKT {}/{}   ZESTRZELONE {}", self.contract_done, self.contract_goal, self.kills),
+            &format!("CONTRACT {}/{}   KILLS {}", self.contract_done, self.contract_goal, self.kills),
             1.9 * u,
             if self.contract_done >= self.contract_goal { ACCENT } else { DIM },
         );
@@ -1072,12 +1073,12 @@ impl State {
             &mut r,
             right,
             h - m - 34.0 * u,
-            &format!("STACJA {:.0} M", dist),
+            &format!("STATION {:.0} M", dist),
             2.0 * u,
             if near { ACCENT } else { DIM },
         );
         if near {
-            right_text(&mut r, right, h - m - 16.0 * u, "G DOKUJ", 2.4 * u, ACCENT);
+            right_text(&mut r, right, h - m - 16.0 * u, "G DOCK", 2.4 * u, ACCENT);
         }
 
         // celownik
@@ -1103,12 +1104,12 @@ impl State {
         let target_s = match self.target {
             Some(i) => {
                 if self.laser > 0.0 {
-                    format!("ASTEROIDA R {:.0}   WYDOBYWANIE", self.rocks[i].radius)
+                    format!("ASTEROID R {:.0}   MINING", self.rocks[i].radius)
                 } else {
-                    format!("ASTEROIDA R {:.0}   F WYDOB", self.rocks[i].radius)
+                    format!("ASTEROID R {:.0}   F MINE", self.rocks[i].radius)
                 }
             }
-            None => "BRAK CELU".to_string(),
+            None => "NO TARGET".to_string(),
         };
         let tw = ui::text_width(&target_s, 2.0 * u);
         // ciemna listwa pod etykietą celu — nad jasną stacją tekst gubił się w tle
@@ -1128,7 +1129,7 @@ impl State {
                 .iter()
                 .map(|e| e.pos.distance(self.ship.pos))
                 .fold(f32::MAX, f32::min);
-            let s = format!("PIRACI {}   NAJBLIZSZY {:.0} M   SPACJA OGIEN", self.enemies.len(), nearest);
+            let s = format!("HOSTILES {}   NEAREST {:.0} M   SPACE FIRE", self.enemies.len(), nearest);
             let tw = ui::text_width(&s, 2.0 * u);
             ui::text(&mut r, (w - tw) * 0.5, m + 96.0 * u, &s, 2.0 * u, WARN);
         }
@@ -1136,7 +1137,7 @@ impl State {
             let tw = ui::text_width(&self.log, 1.9 * u);
             ui::text(&mut r, (w - tw) * 0.5, h - m - 42.0 * u, &self.log, 1.9 * u, DIM);
         }
-        let controls = "F WYDOB   SPACJA OGIEN   G DOKUJ   H SKOK   F5/F9";
+        let controls = "F MINE   SPACE FIRE   G DOCK   H JUMP   F5/F9";
         let cw = ui::text_width(controls, 1.7 * u);
         ui::text(&mut r, (w - cw) * 0.5, h - m - 12.0 * u, controls, 1.7 * u, DIM);
 
@@ -1167,7 +1168,7 @@ impl State {
         let right = dir.cross(up).normalize_or_zero();
         let up2 = right.cross(dir);
 
-        let ship_inst = vec![Instance::new(self.ship.model(), [0.58, 0.64, 0.74, 1.0])];
+        let ship_inst = vec![Instance::new(self.ship.model(), [0.44, 0.47, 0.52, 1.0])];
         let t = self.station_tint;
         let station_model = Mat4::from_translation(self.station_pos)
             * Mat4::from_rotation_y(self.spin * 0.05)
@@ -1243,7 +1244,7 @@ impl State {
             let model = self.ship.model();
             let flicker = 0.85 + 0.15 * (self.spin * 41.0).sin();
             for side in [-1.0f32, 1.0] {
-                let local = Vec3::new(-17.5, 0.0, side * 3.5);
+                let local = Vec3::new(-24.0, 0.0, side * 4.4);
                 let p = model.transform_point3(local);
                 let size = 2.4 + throttle * 3.2;
                 sprites.push(Instance::new(
@@ -1283,6 +1284,18 @@ impl State {
             [1.0, 0.72, 0.38, 0.16],
         ));
 
+        // Słońce: odległa gwiazda w górnej części kadru — daje bloom i kierunek światła.
+        let sun_dir = (dir * 0.92 + up2 * 0.36 + right * 0.22).normalize_or_zero();
+        let sun_p = eye + sun_dir * 18000.0;
+        sprites.push(Instance::new(
+            billboard(sun_p, right, up2, dir, 1900.0, 1900.0),
+            [1.0, 0.72, 0.44, 0.12],
+        ));
+        sprites.push(Instance::new(
+            billboard(sun_p, right, up2, dir, 620.0, 620.0),
+            [3.4, 3.0, 2.5, 1.0],
+        ));
+
         for p in &self.particles {
             let k = (p.life / p.max).clamp(0.0, 1.0);
             let s = p.size * (0.5 + 0.8 * k);
@@ -1312,7 +1325,7 @@ impl State {
 
         self.window.set_title(&format!(
             "VESPER - {}  |  {}  |  {} KR",
-            if self.docked { "DOK" } else { "LOT" },
+            if self.docked { "DOCKED" } else { "FLIGHT" },
             self.sectors[self.sector].name,
             self.credits,
         ));
@@ -1334,7 +1347,7 @@ impl State {
                     if self.docked {
                         self.docked = false;
                         self.ship.speed = 40.0;
-                        self.log = "Odczepiono — lot swobodny".into();
+                        self.log = "Undocked — free flight".into();
                     } else {
                         self.dock();
                     }
@@ -1402,7 +1415,7 @@ impl ApplicationHandler for App {
         let attrs = Window::default_attributes()
             .with_title("VESPER")
             .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0));
-        let window = Arc::new(event_loop.create_window(attrs).expect("brak okna"));
+        let window = Arc::new(event_loop.create_window(attrs).expect("no window"));
         self.state = Some(pollster::block_on(State::new(window)));
     }
 
@@ -1446,10 +1459,10 @@ impl ApplicationHandler for App {
 }
 
 fn main() {
-    let event_loop = EventLoop::new().expect("brak pętli zdarzeń");
+    let event_loop = EventLoop::new().expect("no event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App { state: None };
-    event_loop.run_app(&mut app).expect("pętla padła");
+    event_loop.run_app(&mut app).expect("event loop failed");
 }
 
 #[cfg(test)]

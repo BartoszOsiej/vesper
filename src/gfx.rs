@@ -69,6 +69,11 @@ pub struct Renderer {
     glow_pipeline: wgpu::RenderPipeline,
     sprite_pipeline: wgpu::RenderPipeline,
     bg_pipeline: wgpu::RenderPipeline,
+    shadow_pipeline: wgpu::RenderPipeline,
+    shadow_map: wgpu::TextureView,
+    shadow_bg: wgpu::BindGroup,
+    shadow_bg_empty: wgpu::BindGroup,
+    shadow_buf: wgpu::Buffer,
     cam_buf: wgpu::Buffer,
     cam_bg: wgpu::BindGroup,
     pub meshes: Vec<MeshGpu>,
@@ -109,7 +114,7 @@ impl Renderer {
                 None,
             )
             .await
-            .expect("brak urządzenia");
+            .expect("no device");
 
         let caps = surface.get_capabilities(&adapter);
         let format = caps.formats.iter().find(|f| f.is_srgb()).copied().unwrap_or(caps.formats[0]);
@@ -191,9 +196,112 @@ impl Renderer {
             ],
         });
 
+        // --- mapa cieni: jedna ortograficzna kamera od słońca ---
+        let shadow_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("shadow"),
+            size: wgpu::Extent3d { width: 2048, height: 2048, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let shadow_map = shadow_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("shadow"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            ..Default::default()
+        });
+        // Placeholder dla passu cieni: ta sama tekstura nie może być jednocześnie
+        // załącznikiem i zasobem w jednym passie.
+        let dummy_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("shadow-dummy"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let dummy_view = dummy_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let shadow_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("light"),
+            size: 64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("shadow"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
+            ],
+        });
+        let shadow_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("shadow"),
+            layout: &shadow_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: shadow_buf.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&shadow_map),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&shadow_sampler),
+                },
+            ],
+        });
+
+        let shadow_bg_empty = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("shadow-empty"),
+            layout: &shadow_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: shadow_buf.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&dummy_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&shadow_sampler),
+                },
+            ],
+        });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("mesh"),
-            bind_group_layouts: &[&cam_layout],
+            bind_group_layouts: &[&cam_layout, &shadow_layout],
             push_constant_ranges: &[],
         });
 
@@ -365,6 +473,40 @@ impl Renderer {
                 bias: Default::default(),
             }),
             multisample: wgpu::MultisampleState { count: SAMPLES, ..Default::default() },
+            multiview: None,
+            cache: None,
+        });
+
+        // Pass cieni: tylko głębia, rzut z kierunku słońca.
+        let shadow_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("shadow"),
+            bind_group_layouts: &[&cam_layout, &shadow_layout],
+            push_constant_ranges: &[],
+        });
+        let shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("shadow"),
+            layout: Some(&shadow_pl),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_shadow",
+                buffers: &[Vertex::layout(), Instance::layout()],
+                compilation_options: Default::default(),
+            },
+            fragment: None,
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: Default::default(),
+                bias: wgpu::DepthBiasState { constant: 2, slope_scale: 3.0, clamp: 0.0 },
+            }),
+            multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
         });
@@ -552,6 +694,11 @@ impl Renderer {
             glow_pipeline,
             sprite_pipeline,
             bg_pipeline,
+            shadow_pipeline,
+            shadow_map,
+            shadow_bg,
+            shadow_bg_empty,
+            shadow_buf,
             cam_buf,
             cam_bg,
             meshes: Vec::new(),
@@ -644,6 +791,14 @@ impl Renderer {
         };
         self.queue.write_buffer(&self.cam_buf, 0, bytemuck::bytes_of(&cam));
 
+        // Kamera światła: ortograficzny rzut od słońca na okolicę celu.
+        let light_key = glam::Vec3::new(0.45, 0.62, 0.42).normalize();
+        let light_eye = target + light_key * 4000.0;
+        let light_view = Mat4::look_at_rh(light_eye, target, glam::Vec3::Y);
+        let light_proj = Mat4::orthographic_rh(-1500.0, 1500.0, -1500.0, 1500.0, 10.0, 9000.0);
+        let light_arr = (light_proj * light_view).to_cols_array();
+        self.queue.write_buffer(&self.shadow_buf, 0, bytemuck::cast_slice(&light_arr));
+
         let total: usize = batches
             .iter()
             .chain(glow.iter())
@@ -688,6 +843,42 @@ impl Renderer {
         };
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+
+        // --- pass cieni ---
+        if !ranges.is_empty() {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("shadow"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.shadow_map,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.shadow_pipeline);
+            pass.set_bind_group(0, &self.cam_bg, &[]);
+            pass.set_bind_group(1, &self.shadow_bg_empty, &[]);
+            pass.set_vertex_buffer(1, self.inst_buf.slice(..));
+            let mut current: Option<usize> = None;
+            for (mesh, start, count) in &ranges {
+                if *count == 0 {
+                    continue;
+                }
+                if current != Some(*mesh) {
+                    let m = &self.meshes[*mesh];
+                    pass.set_vertex_buffer(0, m.vbuf.slice(..));
+                    pass.set_index_buffer(m.ibuf.slice(..), wgpu::IndexFormat::Uint32);
+                    current = Some(*mesh);
+                }
+                pass.draw_indexed(0..self.meshes[*mesh].count, 0, *start..*start + *count);
+            }
+        }
+
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main"),
@@ -709,6 +900,7 @@ impl Renderer {
             });
             // tło rysujemy zawsze, także przy pustej scenie
             pass.set_bind_group(0, &self.cam_bg, &[]);
+            pass.set_bind_group(1, &self.shadow_bg, &[]);
             pass.set_pipeline(&self.bg_pipeline);
             pass.draw(0..3, 0..1);
 

@@ -53,17 +53,18 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     }
     bloom /= 11.6;
 
-    var col = base + bloom * 1.15;
+    var col = base + bloom * 1.30;
 
     // ekspozycja i filmowa krzywa
-    col *= 1.35;
+    col *= 1.10;
     col = aces(col);
 
-    // grading: zimne cienie, ciepłe światła, lekkie podbicie kontrastu
+    // grading: zimne cienie, ciepłe światła, mocniejszy kontrast
     let lum = dot(col, vec3<f32>(0.2126, 0.7152, 0.0722));
-    col = mix(col, col * vec3<f32>(0.86, 0.95, 1.12), (1.0 - lum) * 0.42);
-    col = mix(col, col * vec3<f32>(1.08, 1.02, 0.92), smoothstep(0.55, 1.0, lum) * 0.30);
-    col = mix(vec3<f32>(lum), col, 1.06);
+    col = mix(col, col * vec3<f32>(0.84, 0.94, 1.14), (1.0 - lum) * 0.34);
+    col = mix(col, col * vec3<f32>(1.09, 1.03, 0.92), smoothstep(0.55, 1.0, lum) * 0.32);
+    col = mix(col, smoothstep(vec3<f32>(0.0), vec3<f32>(1.0), col), 0.32);
+    col = mix(vec3<f32>(lum), col, 1.08);
 
     // subtelny chroma przy krawędziach kadru
     let edge = clamp(length(in.ndc) * 0.55, 0.0, 0.35);
@@ -73,9 +74,9 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
 
     // winieta i ziarno
     let c = in.ndc;
-    col *= 1.0 - dot(c, c) * 0.10;
+    col *= 1.0 - dot(c, c) * 0.16;
     let grain = hash12(in.clip.xy) - 0.5;
-    col += grain * 0.014;
+    col += grain * 0.010;
 
     return vec4<f32>(clamp(col, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
 }

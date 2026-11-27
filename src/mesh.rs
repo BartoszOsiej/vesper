@@ -70,7 +70,7 @@ impl MeshData {
             }
         }
         if positions.is_empty() || faces.is_empty() {
-            return Err("OBJ bez wierzchołków lub ścian".into());
+            return Err("OBJ has no vertices or faces".into());
         }
 
         let mut out = MeshData::default();
@@ -180,6 +180,84 @@ impl MeshData {
         // panele słoneczne — szeroka, cienka sylwetka
         push_box(&mut out, [radius * 0.98, 44.0, 0.0], [radius * 0.62, 1.5, 40.0], 0.0);
         push_box(&mut out, [-radius * 0.98, 44.0, 0.0], [radius * 0.62, 1.5, 40.0], 0.0);
+        out
+    }
+
+    /// Fregata gracza: kadłub z przekrojów, skrzydła delta, gondole silników
+    /// i drobnica. Model jest procedurowany, więc sylwetka jest smukła
+    /// niezależnie od assetu OBJ.
+    pub fn frigate() -> Self {
+        let mut out = MeshData::default();
+        // (x, half width, half height, y center)
+        let sections: [(f32, f32, f32, f32); 7] = [
+            (23.0, 0.35, 0.30, 0.0),
+            (18.0, 2.0, 0.9, 0.1),
+            (12.0, 3.9, 1.7, 0.2),
+            (3.0, 5.0, 2.2, 0.1),
+            (-7.0, 4.6, 2.0, 0.0),
+            (-16.0, 3.4, 1.5, -0.1),
+            (-22.0, 2.2, 1.1, -0.2),
+        ];
+        let prof: [(f32, f32); 8] = [
+            (0.0, 1.0),
+            (0.85, 0.6),
+            (1.0, 0.0),
+            (0.85, -0.6),
+            (0.0, -1.0),
+            (-0.85, -0.6),
+            (-1.0, 0.0),
+            (-0.85, 0.6),
+        ];
+        for pair in sections.windows(2) {
+            let (xa, wa, ha, ya) = pair[0];
+            let (xb, wb, hb, yb) = pair[1];
+            for k in 0..prof.len() {
+                let (pa, pb) = (prof[k], prof[(k + 1) % prof.len()]);
+                let p0 = [xa, ya + ha * pa.0, wa * pa.1];
+                let p1 = [xa, ya + ha * pb.0, wa * pb.1];
+                let p2 = [xb, yb + hb * pb.0, wb * pb.1];
+                let p3 = [xb, yb + hb * pa.0, wb * pa.1];
+                push_flat_quad(&mut out, p0, p1, p2, p3);
+            }
+        }
+        // dziób: stożek z ostatniego przekroju
+        let (bx, bw, bh, by) = sections[0];
+        for k in 0..prof.len() {
+            let (pa, pb) = (prof[k], prof[(k + 1) % prof.len()]);
+            let p0 = [bx, by + bh * pa.0, bw * pa.1];
+            let p1 = [bx, by + bh * pb.0, bw * pb.1];
+            let tip = [bx + 4.5, by, 0.0];
+            push_flat_tri(&mut out, p0, p1, tip);
+        }
+        // skrzydła delta
+        push_box(&mut out, [-1.0, -0.15, 7.2], [15.0, 0.5, 6.5], 0.40);
+        push_box(&mut out, [-1.0, -0.15, -7.2], [15.0, 0.5, 6.5], -0.40);
+        push_box(&mut out, [-8.0, -0.05, 13.0], [7.0, 0.35, 3.0], 0.62);
+        push_box(&mut out, [-8.0, -0.05, -13.0], [7.0, 0.35, 3.0], -0.62);
+        // statecznik pionowy
+        push_box(&mut out, [-16.0, 3.0, 0.0], [7.0, 4.2, 0.45], 0.0);
+        push_box(&mut out, [-21.0, 1.0, 0.0], [3.0, 2.2, 0.4], 0.0);
+        // gondole silników
+        for side in [-1.0f32, 1.0] {
+            push_cyl_x(&mut out, -20.5, 0.0, side * 4.4, 1.35, 6.4, 14);
+            push_box(&mut out, [-21.5, 0.0, side * 4.4], [1.2, 2.4, 1.2], 0.0);
+            push_box(&mut out, [-19.0, 0.9, side * 4.4], [4.0, 1.6, 0.5], 0.0);
+        }
+        // kokpit i grzbiet
+        push_box(&mut out, [13.5, 1.6, 0.0], [5.5, 1.5, 3.4], 0.0);
+        push_box(&mut out, [4.0, 2.2, 0.0], [8.0, 0.8, 2.6], 0.0);
+        push_box(&mut out, [-6.0, 2.1, 0.0], [5.0, 0.7, 1.8], 0.0);
+        // drobnica: zbiorniki i czujniki
+        for k in 0..10 {
+            let side = if k % 2 == 0 { 1.0 } else { -1.0 };
+            let x = 8.0 - k as f32 * 2.6;
+            push_box(
+                &mut out,
+                [x, 2.25, side * (2.6 + (k % 3) as f32 * 0.5)],
+                [0.9, 0.5, 0.9],
+                0.0,
+            );
+        }
         out
     }
 
@@ -314,6 +392,39 @@ fn push_box(out: &mut MeshData, c: [f32; 3], size: [f32; 3], yaw: f32) {
         }
         out.indices
             .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+}
+
+fn push_flat_tri(out: &mut MeshData, a: [f32; 3], b: [f32; 3], c: [f32; 3]) {
+    let n = norm3(normal(a, b, c));
+    let base = out.verts.len() as u32;
+    for p in [a, b, c] {
+        out.verts.push(Vertex { pos: p, nrm: n });
+    }
+    out.indices.extend_from_slice(&[base, base + 1, base + 2]);
+}
+
+fn push_flat_quad(out: &mut MeshData, a: [f32; 3], b: [f32; 3], c: [f32; 3], d: [f32; 3]) {
+    let n = norm3(normal(a, b, c));
+    let base = out.verts.len() as u32;
+    for p in [a, b, c, d] {
+        out.verts.push(Vertex { pos: p, nrm: n });
+    }
+    out.indices
+        .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+}
+
+fn push_cyl_x(out: &mut MeshData, x: f32, y: f32, z: f32, radius: f32, len: f32, seg: usize) {
+    for i in 0..seg {
+        let a0 = i as f32 / seg as f32 * std::f32::consts::TAU;
+        let a1 = (i + 1) as f32 / seg as f32 * std::f32::consts::TAU;
+        let p0 = [x - len * 0.5, y + a0.cos() * radius, z + a0.sin() * radius];
+        let p1 = [x - len * 0.5, y + a1.cos() * radius, z + a1.sin() * radius];
+        let p2 = [x + len * 0.5, y + a1.cos() * radius, z + a1.sin() * radius];
+        let p3 = [x + len * 0.5, y + a0.cos() * radius, z + a0.sin() * radius];
+        push_flat_quad(out, p0, p1, p2, p3);
+        push_flat_tri(out, [x - len * 0.5, y, z], p1, p0);
+        push_flat_tri(out, [x + len * 0.5, y, z], p3, p2);
     }
 }
 

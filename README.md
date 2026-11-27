@@ -1,93 +1,96 @@
 # VESPER
 
-Nasze EVE w wersji, którą da się uruchomić: statek z własnego generatora MTS-Ships,
-lot, wydobycie, stacja i handel. Renderer własny (wgpu/Vulkan), zero kodu z NV2_ENGINE.
+A space sandbox you can actually launch: a ship from our own MTS-Ships generator,
+flight, mining, a station and trading. Custom renderer (wgpu/Vulkan), no code from
+NV2_ENGINE.
 
-## Uruchomienie
+## Running
 
 ```bash
 cargo run --release
 ```
 
-Wymaga karty z Vulkanem/GL 3.3. Testowane na GeForce 940MX (2 GB) — trzyma 60 fps.
+Requires a GPU with Vulkan/GL 3.3. Tested on a GeForce 940MX (2 GB) — holds 60 fps.
 
-`VESPER_START_DOCKED=1 cargo run` otwiera od razu panel stacji (przydatne do testów UI).
+`VESPER_START_DOCKED=1 cargo run` opens the station panel immediately (handy for UI work).
 
-## Sterowanie
+## Controls
 
-| klawisz | akcja |
+| key | action |
 |---|---|
-| W / S | pochylenie (pitch) |
-| A / D | obrót (yaw) |
-| Q / E | przechylenie (roll) |
-| ↑ / ↓ | ciąg 0–900 m/s |
-| Shift | dopalacz (×4) |
-| F | wydobycie z namierzonej asteroidy |
-| Spacja | ogień do namierzonego pirata |
-| G | dokowanie / odczepienie (stacja musi być w zasięgu 900 m) |
-| H | skok do następnego sektora (kosztuje 1 paliwo) |
-| 1 / 2 / 3 | w dokowaniu: sprzedaj rudę / kup paliwo / sprzedaj stop |
-| Shift + 1 | w dokowaniu: kup rudę (5 szt. za 12 kr) |
-| 5 | w dokowaniu: rafinuj 10 rudy na 8 stopu |
-| 4 | w dokowaniu: odbierz nagrodę za kontrakt |
-| F5 / F9 | zapis / odczyt `savegame.txt` |
-| F11 | pełny ekran |
-| Esc | wyjście |
+| W / S | pitch |
+| A / D | yaw |
+| Q / E | roll |
+| ↑ / ↓ | throttle 0–900 m/s |
+| Shift | afterburner (×4) |
+| F | mine the targeted asteroid |
+| Space | fire at the targeted pirate |
+| G | dock / undock (station within 900 m) |
+| H | jump to the next sector (costs 1 fuel) |
+| 1 / 2 / 3 | while docked: sell ore / buy fuel / sell alloy |
+| Shift + 1 | while docked: buy ore (5 units for 12 cr) |
+| 5 | while docked: refine 10 ore into 8 alloy |
+| 4 | while docked: claim the bounty contract |
+| F5 / F9 | save / load `savegame.txt` |
+| F11 | fullscreen |
+| Esc | quit |
 
-## Struktura
+## Layout
 
-- `src/main.rs` — stan gry, lot, walka, wydobycie, rafineria, lokalne ceny,
-  dwa sektory, kontrakty, zapis, HUD
-- `src/gfx.rs` — renderer wgpu: scena HDR (`Rgba16Float`) z MSAA 4×, pass kompozytu
-  (bloom, ACES, grading, winieta), pipeline siatek z triplanarem, addytywny pass emisji
-  (silniki, tracery, wybuchy, gwiazdy) i pipeline UI 2D
-- `src/post.wgsl` — kompozytor klatki: 16 próbek bloomu, krzywa ACES, korekcja kolorów
-- `src/textures.rs` — proceduralne tekstury poszycia i skały (albedo/wysokość/szorstkość),
-  bez plików, generowane przy starcie
-- `src/mesh.rs` — loader OBJ (płaskie normalne), asteroidy z icosahedronu (2× podział,
-  fBm i wypukłości), geometria stacji (torusy, szprychy, ramiona dokowania, panele)
-- `src/ui.rs` — mikro-font 3×5 i rysowanie tekstu jako pikseli (bez atlasów)
-- `src/market.rs` — market P2S: parser, hash SHA-256, handshake
-- `assets/ships/frigate.obj` — statek z generatora MTS-Ships (`talus/midpoly/ships.py`)
-- `assets/market/market.txt` — lokalna kopia rynku + manifest assetów
+- `src/main.rs` — game state, flight, combat, mining, refinery, local prices,
+  two sectors, contracts, saves, HUD
+- `src/gfx.rs` — wgpu renderer: HDR scene (`Rgba16Float`) with 4× MSAA, composite
+  pass (bloom, ACES, grading, vignette), instanced mesh pipeline with triplanar
+  detail, additive pass for engines/tracers/explosions/stars, and the 2D UI pipeline
+- `src/post.wgsl` — frame compositor: 16-tap bloom, ACES curve, color grading
+- `src/textures.rs` — procedural hull and rock textures (albedo/height/roughness),
+  generated at startup, no image files
+- `src/mesh.rs` — procedural frigate (lofted hull, delta wings, engine nacelles),
+  icosahedron asteroids (2 subdivisions, fBm and ridges), station geometry
+  (torus rings, spokes, docking arms, panels); OBJ loader kept for assets
+- `src/ui.rs` — 3×5 micro-font, text drawn as pixels (no atlas)
+- `src/market.rs` — P2S market: parser, SHA-256 handshake
+- `assets/ships/frigate.obj` — reference asset from the MTS-Ships generator
+  (`midpoly/ships.py`), verified by the market handshake
+- `assets/market/market.txt` — local market copy + asset manifest
 
 ## Market P2S — handshake
 
-Klient startuje z lokalną kopią rynku i manifestem hashów. Przy starcie liczy SHA-256
-każdego assetu i porównuje z manifestem. **Niezgodność = gra nie startuje:**
+The client starts with a local market copy and an asset hash manifest. On startup it
+computes SHA-256 for every asset and compares it with the manifest. **A mismatch stops
+the game:**
 
 ```
-rynek odrzucony: asset ships/frigate.obj niezgodny z manifestem
-(oczekiwano e0a7326…, jest e6326c8…)
+market rejected: asset ships/frigate.obj does not match the manifest
+(expected e0a7326…, got e6326c8…)
 ```
 
-To jest zabezpieczenie przed podmienionym modelem i przed klientem z innego builda.
+That guards against a swapped model and against a client from another build.
 
-## Pętla rozgrywki
+## Gameplay loop
 
-wydobycie rudy → rafinacja (10 rudy → 8 stopu) → walka z piratami
-(+350 kr za zestrzelenie, kontrakt na 3 piratów za 900 kr) → dokowanie →
-sprzedaż rudy i stopu / zakup paliwa → skok do kolejnego sektora.
-Stop jest wart 26 kr za sztukę, ruda tylko 8 kr, więc opłaca się ją przetworzyć.
-Piraci wracają, więc sektor nie pustoszeje. Śmierć = odrodzenie przy stacji i utrata ładowni.
+mine ore → refine (10 ore → 8 alloy) → fight pirates (+350 cr per kill, contract for
+3 pirates worth 900 cr) → dock → sell ore and alloy / buy fuel → jump to the next
+sector. Alloy is worth 26 cr per unit, ore only 8 cr, so refining pays off. Pirates
+respawn, so a sector never goes quiet. Death respawns you at the station and wipes cargo.
 
-Ładownia ma 200 m³: ruda zajmuje 1 m³, stop 0,6 m³. Wydobycie zatrzymuje się,
-gdy brakuje miejsca.
+Cargo holds 200 m³: ore takes 1 m³, alloy 0.6 m³. Mining stops when there is no room.
 
-Są dwa sektory (HARTWELL i KEPLER-9) z osobnym układem asteroid, piratów i kolorem
-stacji. Ceny są lokalne: HARTWELL to hub przemysłowy (paliwo 45 kr, stop 22 kr),
-KEPLER-9 to frontier (paliwo 70 kr, stop 32 kr). Opłaca się rafinować w HARTWELL
-i wozić stop do KEPLER-9, a paliwo tankować tam, gdzie jest tanie.
+There are two sectors (HARTWELL and KEPLER-9) with separate asteroid fields, pirates and
+station colors. Prices are local: HARTWELL is the industrial hub (fuel 45 cr, alloy 22 cr),
+KEPLER-9 is the frontier (fuel 70 cr, alloy 32 cr). Refining in HARTWELL and hauling alloy
+to KEPLER-9 pays, and fuel is cheapest where it is produced.
 
-Skok zabiera 1 paliwo; stan gry (sektor, kredyty, obie ładownie, kontrakt, pozycja)
-można zapisać pod F5 i wczytać pod F9.
+A jump costs 1 fuel; game state (sector, credits, both cargo holds, contract, position)
+can be saved with F5 and loaded with F9.
 
-Lot jest fizyczny: asteroidy i stacja mają kolizje (sfery), uderzenie uszkadza kadłub
-proporcjonalnie do prędkości, a statek odbija się od przeszkody. Stacja ma 264 m
-promienia i widać ją z daleka — dokowanie to powolny oblot wokół pierścienia.
+Flight is physical: asteroids and the station have collision spheres, an impact damages
+the hull proportionally to speed and bounces the ship off. The station is 264 m in radius
+and visible from far away — docking is a slow orbit around the ring.
 
-## Czego nie ma
+## What is missing
 
-Animacji, dźwięku, sieci P2P, więcej niż dwóch sektorów, produkcji poza rafinerią
-i misji innych niż bounty. Cienie są nadal tylko ekranowe (brak shadow map),
-a normalne pochodzą z geometrii i proceduralnej wysokości, nie z tekstur normalnych.
+Animation, sound, P2P networking, more than two sectors, production beyond the refinery,
+and missions other than bounties. Lighting is a shadow map (2048², PCF 3×3) plus key,
+fill and ambient, with screen-space bump from the procedural height; the nebula is a
+background shader rather than volumetric geometry.

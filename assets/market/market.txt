@@ -1,0 +1,7 @@
+# Market P2S — lokalna kopia rynku stacji VESPER-01
+station VESPER-01
+version 1
+item ore_raw "Ruda" 12 8
+item ore_refined "Stop" 34 26
+item fuel "Paliwo" 55 40
+asset ships/frigate.obj e0a73264b3af8044dffb08aa71c3b700cc18a119fe3e43014eb5192e3c258309
